@@ -22,7 +22,7 @@ public class Recorder {
     public static final String ACTION_RECORD = "Record";
     public static final String MSG_RECORDING = "Recording...";
     public static final String MSG_RECORDING_DONE = "Recording done...!";
-    public static final int RECORDING_DURATION = 60; //60 seconds
+    public static final int RECORDING_DURATION = 30; //30 seconds
 
     private final Context mContext;
     private final AtomicBoolean mInProgress = new AtomicBoolean(false);
@@ -116,6 +116,8 @@ public class Recorder {
 
                 int bytesRead = audioRecord.read(audioData, 0, bufferSize);
                 if (bytesRead > 0) {
+                    if (totalBytesRead + bytesRead > bufferSize30Sec)
+                        break;
                     buffer30Sec.put(audioData, 0, bytesRead);
                     bufferRealtime.put(audioData, 0, bytesRead);
                 } else {
@@ -130,7 +132,7 @@ public class Recorder {
                     timer = timer_tmp;
 
                     // Transcribe realtime buffer after every 3 seconds
-                    if (timer % 3 == 0) {
+                    if (timer % 1 == 0) {
                         // Flip the buffer for reading
                         bufferRealtime.flip();
                         bufferRealtime.order(ByteOrder.nativeOrder());
@@ -161,7 +163,7 @@ public class Recorder {
 
             sendUpdate(MSG_RECORDING_DONE);
         } catch (Exception e) {
-            Log.e(TAG, "Error...", e);
+            Log.e(TAG, "Error..." + e.getMessage(), e);
             sendUpdate(e.getMessage());
         }
     }

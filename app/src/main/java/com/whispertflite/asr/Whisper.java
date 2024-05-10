@@ -51,7 +51,7 @@ public class Whisper {
             mWhisperEngine.initialize(modelPath, vocabPath, isMultilingual);
 
             // Start thread for mic data transcription in realtime
-            startMicTranscriptionThread();
+             startMicTranscriptionThread();
         } catch (IOException e) {
             Log.e(TAG, "Error...", e);
         }
@@ -105,6 +105,11 @@ public class Whisper {
     private void sendResult(String message) {
         if (mUpdateListener != null)
             mUpdateListener.onResultReceived(message);
+    }
+
+    private void sendSamples(float[] samples) {
+        if (mUpdateListener != null)
+            mUpdateListener.onSamplesReceived(samples);
     }
 
     private void threadFunction() {
@@ -179,8 +184,12 @@ public class Whisper {
                     float[] samples = readBuffer();
                     if (samples != null) {
                         synchronized (mWhisperEngineLock) {
-                            String result = mWhisperEngine.transcribeBuffer(samples);
-                            sendResult(result);
+                            if (true) {
+                                String result = mWhisperEngine.transcribeBuffer(samples);
+                                sendResult(result);
+                            } else {
+                                sendSamples(samples);
+                            }
                         }
                     }
                 }

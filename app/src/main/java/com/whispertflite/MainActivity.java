@@ -1,6 +1,7 @@
 package com.whispertflite;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -17,6 +18,7 @@ import android.widget.Button;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
@@ -27,15 +29,22 @@ import com.whispertflite.utils.WaveUtil;
 import com.whispertflite.asr.Recorder;
 import com.whispertflite.asr.Whisper;
 
+import org.jetbrains.annotations.Nullable;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 
+import ai.onnxruntime.OnnxTensor;
+
 public class MainActivity extends AppCompatActivity {
-    private final String TAG = "MainActivity";
+    @Nullable
+    public static final String TAG = "MainActivity";
 
     private TextView tvStatus;
     private TextView tvResult;
@@ -43,6 +52,31 @@ public class MainActivity extends AppCompatActivity {
 
     private Whisper mWhisper = null;
     private Recorder mRecorder = null;
+
+    private SpeechRecognizer speechRecognizer = null;
+
+    private SpeechRecognizer getSpeechRecognizer() {
+        if (speechRecognizer == null) {
+
+            String onnxmodelPath = getFilePath("whisper_cpu_int8_model.onnx");
+            try(FileInputStream inputStream = new FileInputStream(onnxmodelPath)) {
+//            try (InputStream inputStream = getResources().openRawResource(R.raw.whisper_cpu_int8_model)) {
+                byte[] modelBytes = new byte[0];
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                byte[] data = new byte[1024];
+                int nRead;
+                while((nRead=inputStream.read(data, 0, data.length)) != -1) {
+                    buffer.write(data, 0, nRead);
+                }
+                buffer.flush();
+                speechRecognizer = new SpeechRecognizer(buffer.toByteArray());
+            } catch (IOException e) {
+                e.printStackTrace();
+                // Handle exception appropriately
+            }
+        }
+        return speechRecognizer;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -100,6 +134,7 @@ public class MainActivity extends AppCompatActivity {
         // files.add(WaveUtil.RECORDING_FILE);
         try {
             String[] assetFiles = getAssets().list("");
+            assert assetFiles != null;
             for (String file : assetFiles) {
                 if (file.endsWith(".wav"))
                     files.add(file);
@@ -132,9 +167,10 @@ public class MainActivity extends AppCompatActivity {
         });
 
         // Call the method to copy specific file types from assets to data folder
-        String[] extensionsToCopy = {"pcm", "bin", "wav", "tflite"};
+        String[] extensionsToCopy = {"pcm", "bin", "wav", "tflite", "onnx"};
         copyAssetsWithExtensionsToDataFolder(this, extensionsToCopy);
 
+        getSpeechRecognizer();
 
         String modelPath;
         String vocabPath;
@@ -145,7 +181,8 @@ public class MainActivity extends AppCompatActivity {
             vocabPath = getFilePath("filters_vocab_multilingual.bin");
         } else {
             // English-only model and vocab
-            modelPath = getFilePath("whisper-tiny-en.tflite");
+//            modelPath = getFilePath("whisper-tiny-en.tflite");
+            modelPath = getFilePath("whisper.tflite");
             vocabPath = getFilePath("filters_vocab_en.bin");
         }
 
@@ -170,6 +207,19 @@ public class MainActivity extends AppCompatActivity {
                 Log.d(TAG, "Result: " + result);
                 handler.post(() -> tvResult.append(result));
             }
+
+            public void onSamplesReceived(float[] samples) {
+                Log.d(TAG, "Samples received: " + samples.length);
+
+                OnnxTensor audioTensor = AudioTensorSource.fromRawSamples(samples);
+
+                long startTime = System.currentTimeMillis();
+                Log.d(TAG, "Processing audio...");
+
+                SpeechRecognizer.Result result = getSpeechRecognizer().run(audioTensor);
+
+                handler.post(() -> tvResult.append(result.getText()));
+            }
         });
 
         mRecorder = new Recorder(this);
@@ -177,19 +227,22 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onUpdateReceived(String message) {
                 Log.d(TAG, "Update is received, Message: " + message);
-                handler.post(() -> tvStatus.setText(message));
+                if (message != null) {
+                    handler.post(() -> tvStatus.setText(message));
 
-                if (message.equals(Recorder.MSG_RECORDING)) {
-                    handler.post(() -> tvResult.setText(""));
-                    handler.post(() -> btnMicRec.setText(Recorder.ACTION_STOP));
-                } else if (message.equals(Recorder.MSG_RECORDING_DONE)) {
-                    handler.post(() -> btnMicRec.setText(Recorder.ACTION_RECORD));
+                    if (message.equals(Recorder.MSG_RECORDING)) {
+                        handler.post(() -> tvResult.setText(""));
+                        handler.post(() -> btnMicRec.setText(Recorder.ACTION_STOP));
+                    } else if (message.equals(Recorder.MSG_RECORDING_DONE)) {
+                        handler.post(() -> btnMicRec.setText(Recorder.ACTION_RECORD));
+                    }
                 }
             }
 
             @Override
             public void onDataReceived(float[] samples) {
-                //mWhisper.writeBuffer(samples);
+                Log.d(TAG, "Update is received, Data: " + samples.length);
+                mWhisper.writeBuffer(samples);
             }
         });
 
@@ -211,7 +264,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (grantResults[0] == PackageManager.PERMISSION_GRANTED)
             Log.d(TAG, "Record permission is granted");
@@ -233,10 +286,33 @@ public class MainActivity extends AppCompatActivity {
     }
 
     // Transcription calls
+    @SuppressLint("SetTextI18n")
     private void startTranscription(String waveFilePath) {
-        mWhisper.setFilePath(waveFilePath);
-        mWhisper.setAction(Whisper.ACTION_TRANSCRIBE);
-        mWhisper.start();
+        if (true) {
+            mWhisper.setFilePath(waveFilePath);
+            mWhisper.setAction(Whisper.ACTION_TRANSCRIBE);
+            mWhisper.start();
+        } else {
+            OnnxTensor audioTensor = AudioTensorSource.fromRawWavfile(waveFilePath);
+
+            long startTime = System.currentTimeMillis();
+            Log.d(TAG, "Processing audio...");
+            tvStatus.setText("Processing...");
+            tvResult.setText("");
+            tvStatus.invalidate();
+            tvResult.invalidate();
+
+            SpeechRecognizer.Result result = getSpeechRecognizer().run(audioTensor);
+
+            Log.d(TAG, "Transcription completed.");
+
+            long endTime = System.currentTimeMillis();
+            long timeTaken = endTime - startTime;
+            Log.d(TAG, "Time Taken for transcription: " + timeTaken + "ms");
+
+            tvStatus.setText("Processing done in " + timeTaken + "ms");
+            tvResult.setText(result.getText());
+        }
     }
 
     private void stopTranscription() {
@@ -253,6 +329,7 @@ public class MainActivity extends AppCompatActivity {
             for (String extension : extensions) {
                 // List all files in the assets folder with the specified extension
                 String[] assetFiles = assetManager.list("");
+                assert assetFiles != null;
                 for (String assetFileName : assetFiles) {
                     if (assetFileName.endsWith("." + extension)) {
                         File outFile = new File(destFolder, assetFileName);
